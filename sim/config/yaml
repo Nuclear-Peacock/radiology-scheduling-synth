@@ -1,0 +1,18 @@
+ED_flux: 1.0
+INPATIENT_flux: 1.0
+OUTPATIENT_flux: 1.0
+
+modality_mix:
+  XR: 0.30
+  US: 0.20
+  CT: 0.30
+  MR: 0.20
+
+CT_downtime_rate: 0.10
+MR_downtime_rate: 0.10
+
+INPATIENT_transport_delay_min: 18
+
+OUTPATIENT_no_show_rate: 0.08
+overbooking_threshold: 0.60
+ED_CT_reserve_capacity: 0.10
