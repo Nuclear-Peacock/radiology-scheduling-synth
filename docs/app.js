@@ -187,7 +187,7 @@ function computeKPIs(knobs, durationModel, noshowModel){
   const xNS = padOrTruncate(scenario, nsInDim);
   const nsLogit = mlpForward(xNS, noshowModel)[0];
   // Blend learner nsRate with NN “shape” (still only OP)
-  const nsNN = clamp(sigmoid(nsLogit), 0.01, 0.40);
+  const nsNN = clamp(sigmoid(nsLogit), 0.01, 0.25);
   const nsBase = clamp(knobs.nsRate, 0, 0.40);
   const nsFrac = clamp(0.65 * nsBase + 0.35 * nsNN, 0.0, 0.40);
 
