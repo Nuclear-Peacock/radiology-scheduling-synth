@@ -503,7 +503,7 @@ def main() -> None:
         scanner_next_free[best_sid] = best_start + timedelta(minutes=advance_minutes)
 
         planned_rows.append({
-            "sps_id": f"S{ sps_counter:08d }",
+            "sps_id": f"S{sps_counter:08d}",
             "order_id": str(o["order_id"]),
             "patient_type": setting,
             "resource_modality": modality_needed,
