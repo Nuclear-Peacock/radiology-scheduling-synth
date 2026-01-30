@@ -178,8 +178,6 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/";
-
     const durMeta = await withTimeout(fetchJson("./public/models/duration_features.json"), 4000, "duration_features.json");
     const nsMeta  = await withTimeout(fetchJson("./public/models/noshow_features.json"), 4000, "noshow_features.json");
 
