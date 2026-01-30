@@ -11,7 +11,7 @@
     <div>
       <h1>Radiology Scheduling Simulator (Synthetic) + ML</h1>
       <p class="sub">
-        Educational demo: synthetic data, browser inference (ONNX), policy knobs, and radiology KPIs.
+        Educational demo: synthetic knobs + neural-net weights (pure JS) + radiology KPIs.
       </p>
     </div>
     <div class="badge">Educational Only</div>
@@ -28,6 +28,14 @@
     <section class="card">
       <h2>Controls (10 Knobs)</h2>
 
+      <h3>Presets</h3>
+      <div class="presetRow">
+        <button class="btn2" id="preset_normal">Normal day</button>
+        <button class="btn2" id="preset_winter">Winter surge</button>
+        <button class="btn2" id="preset_mri_down">MRI downtime</button>
+        <button class="btn2" id="preset_ed_surge">ED CT surge</button>
+      </div>
+
       <div class="control">
         <label>ED flux multiplier <span id="v_edFlux"></span></label>
         <input id="edFlux" type="range" min="0.5" max="2.0" step="0.05" value="1.0">
@@ -43,7 +51,7 @@
         <input id="opFlux" type="range" min="0.7" max="1.2" step="0.02" value="1.0">
       </div>
 
-      <h3>Modality mix (must sum ~100%)</h3>
+      <h3>Modality mix (should sum ~100%)</h3>
 
       <div class="control">
         <label>XR % <span id="v_mixXR"></span></label>
@@ -94,7 +102,7 @@
 
       <button id="runBtn" class="btn">Run simulation</button>
       <p class="hint">
-        Tip: move sliders, then click <em>Run simulation</em>. (All computation runs in your browser.)
+        Tip: Try a preset, then tweak sliders and re-run. (Everything runs in your browser.)
       </p>
     </section>
 
@@ -115,6 +123,22 @@
         <div class="kpi"><div class="k">Throughput (completed/day)</div><div class="v" id="k_throughput">—</div></div>
       </div>
 
+      <h3>Charts (Synthetic)</h3>
+      <div class="chartGrid">
+        <div class="chartCard">
+          <div class="chartTitle">Utilization</div>
+          <canvas id="chartUtil" width="520" height="220"></canvas>
+        </div>
+        <div class="chartCard">
+          <div class="chartTitle">Wait times</div>
+          <canvas id="chartWait" width="520" height="220"></canvas>
+        </div>
+        <div class="chartCard">
+          <div class="chartTitle">Operations</div>
+          <canvas id="chartOps" width="520" height="220"></canvas>
+        </div>
+      </div>
+
       <h3>Model status</h3>
       <pre id="status" class="status">Loading…</pre>
     </section>
@@ -124,14 +148,7 @@
     Educational Use Only (Non-Clinical). Synthetic data and models; not validated for clinical use.
   </footer>
 
-<hr />
-<p style="font-size:12px;color:#666;">
-Educational synthetic radiology simulator. Not for clinical use.
-</p>
-
-<script src="./app.js"></script>
+  <script src="./app.js"></script>
 </body>
 </html>
 
-</body>
-</html>
