@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Radiology Scheduling Simulator (Synthetic)</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header class="header">
+    <div>
+      <h1>Radiology Scheduling Simulator (Synthetic) + ML</h1>
+      <p class="sub">
+        Educational demo: synthetic data, browser inference (ONNX), policy knobs, and radiology KPIs.
+      </p>
+    </div>
+    <div class="badge">Educational Only</div>
+  </header>
+
+  <section class="disclaimer">
+    <strong>Educational Use Only (Non-Clinical).</strong>
+    This demo uses synthetic data and is not validated for clinical use.
+    Do not use for patient care or real operational scheduling.
+  </section>
+
+  <main class="grid">
+    <!-- Controls -->
+    <section class="card">
+      <h2>Controls (10 Knobs)</h2>
+
+      <div class="control">
+        <label>ED flux multiplier <span id="v_edFlux"></span></label>
+        <input id="edFlux" type="range" min="0.5" max="2.0" step="0.05" value="1.0">
+      </div>
+
+      <div class="control">
+        <label>Inpatient flux multiplier <span id="v_inFlux"></span></label>
+        <input id="inFlux" type="range" min="0.5" max="2.0" step="0.05" value="1.0">
+      </div>
+
+      <div class="control">
+        <label>Outpatient density multiplier <span id="v_opFlux"></span></label>
+        <input id="opFlux" type="range" min="0.7" max="1.2" step="0.02" value="1.0">
+      </div>
+
+      <h3>Modality mix (must sum ~100%)</h3>
+
+      <div class="control">
+        <label>XR % <span id="v_mixXR"></span></label>
+        <input id="mixXR" type="range" min="5" max="80" step="1" value="30">
+      </div>
+      <div class="control">
+        <label>US % <span id="v_mixUS"></span></label>
+        <input id="mixUS" type="range" min="5" max="60" step="1" value="20">
+      </div>
+      <div class="control">
+        <label>CT % <span id="v_mixCT"></span></label>
+        <input id="mixCT" type="range" min="5" max="80" step="1" value="30">
+      </div>
+      <div class="control">
+        <label>MR % <span id="v_mixMR"></span></label>
+        <input id="mixMR" type="range" min="5" max="80" step="1" value="20">
+      </div>
+
+      <div class="control">
+        <label>CT downtime rate/day <span id="v_ctDown"></span></label>
+        <input id="ctDown" type="range" min="0" max="0.3" step="0.01" value="0.10">
+      </div>
+
+      <div class="control">
+        <label>MR downtime rate/day <span id="v_mrDown"></span></label>
+        <input id="mrDown" type="range" min="0" max="0.3" step="0.01" value="0.10">
+      </div>
+
+      <div class="control">
+        <label>Inpatient transport delay mean (min) <span id="v_transport"></span></label>
+        <input id="transport" type="range" min="0" max="60" step="1" value="18">
+      </div>
+
+      <div class="control">
+        <label>Outpatient base no-show rate <span id="v_ns"></span></label>
+        <input id="nsRate" type="range" min="0" max="0.25" step="0.01" value="0.08">
+      </div>
+
+      <div class="control">
+        <label>Overbooking threshold t (0–1) <span id="v_overT"></span></label>
+        <input id="overT" type="range" min="0.2" max="0.95" step="0.01" value="0.60">
+      </div>
+
+      <div class="control">
+        <label>ED CT reserve capacity % <span id="v_reserve"></span></label>
+        <input id="reserve" type="range" min="0" max="0.30" step="0.01" value="0.10">
+      </div>
+
+      <button id="runBtn" class="btn">Run simulation</button>
+      <p class="hint">
+        Tip: move sliders, then click <em>Run simulation</em>. (All computation runs in your browser.)
+      </p>
+    </section>
+
+    <!-- KPIs -->
+    <section class="card">
+      <h2>Radiology KPIs (Synthetic)</h2>
+
+      <div class="kpiGrid">
+        <div class="kpi"><div class="k">ED median time-to-scan</div><div class="v" id="k_edTTS">—</div></div>
+        <div class="kpi"><div class="k">Inpatient median time-to-scan</div><div class="v" id="k_inTTS">—</div></div>
+        <div class="kpi"><div class="k">Outpatient on-time start %</div><div class="v" id="k_opOnTime">—</div></div>
+        <div class="kpi"><div class="k">CT utilization %</div><div class="v" id="k_ctUtil">—</div></div>
+        <div class="kpi"><div class="k">MR utilization %</div><div class="v" id="k_mrUtil">—</div></div>
+        <div class="kpi"><div class="k">Overtime (min/day)</div><div class="v" id="k_overtime">—</div></div>
+        <div class="kpi"><div class="k">Idle time (min/day)</div><div class="v" id="k_idle">—</div></div>
+        <div class="kpi"><div class="k">Outpatient no-show %</div><div class="v" id="k_ns">—</div></div>
+        <div class="kpi"><div class="k">Outpatient bumps/day</div><div class="v" id="k_bumps">—</div></div>
+        <div class="kpi"><div class="k">Throughput (completed/day)</div><div class="v" id="k_throughput">—</div></div>
+      </div>
+
+      <h3>Model status</h3>
+      <pre id="status" class="status">Loading…</pre>
+    </section>
+  </main>
+
+  <footer class="footer">
+    Educational Use Only (Non-Clinical). Synthetic data and models; not validated for clinical use.
+  </footer>
+
+  <script src="./app.js"></script>
+</body>
+</html>
