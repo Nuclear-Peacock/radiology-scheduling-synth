@@ -30,19 +30,20 @@ def main() -> None:
     sched = pd.read_csv(os.path.join(raw_dir, "schedule_planned.csv"))
     exe = pd.read_csv(os.path.join(raw_dir, "execution_actual.csv"))
 
-    # Parse timestamps we know exist
+    # Parse timestamps in their native tables
     orders["order_time"] = pd.to_datetime(orders["order_time"], errors="coerce")
     sched["scheduled_start"] = pd.to_datetime(sched["scheduled_start"], errors="coerce")
+
     exe["actual_start"] = pd.to_datetime(exe["actual_start"], errors="coerce")
     exe["actual_end"] = pd.to_datetime(exe["actual_end"], errors="coerce")
 
-    # IMPORTANT: execution_actual also has scheduled_start; drop it to avoid merge column collisions
-    if "scheduled_start" in exe.columns:
-        exe = exe.drop(columns=["scheduled_start"])
-    if "scheduled_end" in exe.columns:
-        exe = exe.drop(columns=["scheduled_end"])
+    # IMPORTANT: execution_actual also contains scheduled_start/scheduled_end/order_time as strings.
+    # Drop them so the merge never creates confusing duplicates.
+    drop_from_exe = [c for c in ["scheduled_start", "scheduled_end", "order_time"] if c in exe.columns]
+    if drop_from_exe:
+        exe = exe.drop(columns=drop_from_exe)
 
-    # Merge schedule + execution first (keep schedule's scheduled_start)
+    # Merge schedule + execution (keep schedule's scheduled_start)
     df = sched.merge(
         exe,
         on=["sps_id", "order_id", "scanner_id", "patient_type", "resource_modality"],
@@ -50,7 +51,7 @@ def main() -> None:
         suffixes=("_sched", "_exe"),
     )
 
-    # Merge orders (brings order_time and order features)
+    # Merge orders (keep orders' order_time)
     df = df.merge(
         orders,
         on=["order_id", "patient_type"],
@@ -58,16 +59,20 @@ def main() -> None:
         suffixes=("", "_order"),
     )
 
-    # Use scheduled_start from schedule table
+    # Pick scheduled_start from schedule table
     sched_start_col = _pick_col(df, ["scheduled_start", "scheduled_start_sched", "scheduled_start_x"])
     df[sched_start_col] = pd.to_datetime(df[sched_start_col], errors="coerce")
+
+    # Pick order_time from orders table
+    order_time_col = _pick_col(df, ["order_time", "order_time_order", "order_time_y"])
+    df[order_time_col] = pd.to_datetime(df[order_time_col], errors="coerce")
 
     # Features
     df["hour"] = df[sched_start_col].dt.hour.fillna(0).astype(int)
     df["dow"] = df[sched_start_col].dt.dayofweek.fillna(0).astype(int)
 
-    # Lead time (OP only really matters, but safe everywhere)
-    df["lead_time_days"] = ((df[sched_start_col] - df["order_time"]).dt.total_seconds() / 86400.0).fillna(0.0)
+    # Lead time (days)
+    df["lead_time_days"] = ((df[sched_start_col] - df[order_time_col]).dt.total_seconds() / 86400.0).fillna(0.0)
     df["lead_time_days"] = df["lead_time_days"].clip(lower=0.0)
 
     # Duration target (only where completed and actual timestamps exist)
