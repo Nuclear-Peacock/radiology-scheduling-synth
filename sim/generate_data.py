@@ -415,4 +415,268 @@ def main() -> None:
         return ot + timedelta(minutes=int(rng.integers(30, 240)))
 
     # Capacity reservation: reserve a % of CT capacity for ED by blocking outpatient CT bookings
-    # Implementation: for each CT scanner per day,
+    # Implementation: for each CT scanner per day, define "reserved minutes" at the end of day.
+    # Outpatient CT cannot schedule into the reserved tail.
+    reserved_tail_minutes_per_ct = int(round(24 * 60 * config.ED_CT_reserve_capacity))
+
+    for idx, o in orders_df.iterrows():
+        setting = str(o["patient_type"])
+        modality_needed = str(o["resource_modality"])
+
+        planned_start = compute_planned_start(o)
+        planned_duration = _sample_duration_minutes(rng, modality_needed)
+
+        # add coarse buffers for contrast/sedation/isolation (educational)
+        if int(o["requires_contrast"]) == 1 and modality_needed in ("CT", "MR"):
+            planned_duration += int(rng.integers(8, 16))
+        if int(o["requires_sedation"]) == 1 and modality_needed == "MR":
+            planned_duration += int(rng.integers(20, 40))
+        if int(o["isolation"]) == 1:
+            planned_duration += int(rng.integers(5, 12))
+
+        candidate_scanners = pick_scanner(modality_needed, setting)
+        if not candidate_scanners:
+            # should not happen if resources.csv is correct
+            continue
+
+        # Choose earliest available among eligible scanners
+        best_sid = None
+        best_start = None
+
+        for sid in candidate_scanners:
+            # Lazy init next free based on scanner's open time for that day
+            # Ensure planned_start respects scanner opening
+            r = resources.loc[resources["scanner_id"] == sid].iloc[0]
+            open_dt, close_dt = _scanner_day_window(r, planned_start.replace(hour=0, minute=0, second=0, microsecond=0))
+
+            # Apply outpatient CT reserve tail capacity
+            effective_close = close_dt
+            if modality_needed == "CT" and setting == "OUTPATIENT" and reserved_tail_minutes_per_ct > 0:
+                effective_close = close_dt - timedelta(minutes=reserved_tail_minutes_per_ct)
+
+            key = (sid, planned_start.date())
+            if sid not in scanner_next_free or scanner_next_free[sid].date() != planned_start.date():
+                scanner_next_free[sid] = open_dt
+
+            start_time = max(planned_start, scanner_next_free[sid], open_dt)
+            end_time = start_time + timedelta(minutes=planned_duration)
+
+            # If outpatient and would exceed effective close, push to next day at open
+            if setting == "OUTPATIENT" and end_time > effective_close:
+                # Move to next day open
+                next_day = (planned_start + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                open_dt2, close_dt2 = _scanner_day_window(r, next_day)
+                effective_close2 = close_dt2
+                if modality_needed == "CT" and reserved_tail_minutes_per_ct > 0:
+                    effective_close2 = close_dt2 - timedelta(minutes=reserved_tail_minutes_per_ct)
+                start_time = open_dt2
+                end_time = start_time + timedelta(minutes=planned_duration)
+                if end_time > effective_close2:
+                    # if still impossible, skip (extreme edge)
+                    continue
+
+            if best_start is None or start_time < best_start:
+                best_start = start_time
+                best_sid = sid
+
+        if best_sid is None or best_start is None:
+            continue
+
+        planned_end = best_start + timedelta(minutes=planned_duration)
+
+        # Simple overbooking (educational):
+        # estimate predicted no-show probability (not a model yet): higher with longer lead time
+        pred_no_show = 0.0
+        if setting == "OUTPATIENT":
+            lead = int(o["outpatient_lead_days"])
+            pred_no_show = min(0.95, max(0.01, config.OUTPATIENT_no_show_rate * (1.0 + 0.04 * lead)))
+            # If high predicted no-show, allow mild overbooking by NOT advancing scanner_next_free fully
+            # (creates tighter packing / overlap risk → bump/late starts in simulation)
+            if pred_no_show >= config.overbooking_threshold:
+                advance_minutes = int(round(planned_duration * 0.70))  # aggressive
+            else:
+                advance_minutes = planned_duration
+        else:
+            advance_minutes = planned_duration
+
+        # Update scanner availability
+        scanner_next_free[best_sid] = best_start + timedelta(minutes=advance_minutes)
+
+        planned_rows.append({
+            "sps_id": f"S{ sps_counter:08d }",
+            "order_id": str(o["order_id"]),
+            "patient_type": setting,
+            "resource_modality": modality_needed,
+            "scanner_id": best_sid,
+            "scheduled_start": best_start.isoformat(),
+            "scheduled_end": planned_end.isoformat(),
+            "planned_duration_min": planned_duration,
+            "pred_no_show_proxy": round(pred_no_show, 4),
+            "educational_note": "Synthetic planned schedule (not clinical)."
+        })
+        sps_counter += 1
+
+    schedule_df = pd.DataFrame(planned_rows)
+
+    # ---------- Simulate Actual Execution ----------
+    # Build downtime events per day
+    downtime_by_day: Dict[datetime.date, Dict[str, List[Tuple[datetime, datetime]]]] = {}
+    for day_i in range(config.num_days):
+        day = (config.start_date + timedelta(days=day_i)).replace(hour=0, minute=0, second=0, microsecond=0)
+        downtime_by_day[day.date()] = _generate_downtime_events(
+            rng=rng,
+            resources=resources,
+            day=day,
+            ct_rate=config.CT_downtime_rate,
+            mr_rate=config.MR_downtime_rate
+        )
+
+    # Simulate in scanner order
+    schedule_df["scheduled_start_dt"] = pd.to_datetime(schedule_df["scheduled_start"])
+    schedule_df = schedule_df.sort_values(["scanner_id", "scheduled_start_dt"]).reset_index(drop=True)
+
+    exec_rows: List[dict] = []
+    scanner_actual_next_free: Dict[Tuple[str, datetime.date], datetime] = {}
+
+    # Create fast lookup for order fields
+    orders_lookup = orders_df.set_index("order_id")
+
+    for _, s in schedule_df.iterrows():
+        sps_id = str(s["sps_id"])
+        order_id = str(s["order_id"])
+        scanner_id = str(s["scanner_id"])
+        setting = str(s["patient_type"])
+        modality = str(s["resource_modality"])
+
+        scheduled_start = pd.to_datetime(s["scheduled_start_dt"]).to_pydatetime()
+        planned_duration = int(s["planned_duration_min"])
+        day_key = scheduled_start.date()
+
+        # Initialize scanner day window and actual next free
+        r = resources.loc[resources["scanner_id"] == scanner_id].iloc[0]
+        open_dt, close_dt = _scanner_day_window(r, scheduled_start.replace(hour=0, minute=0, second=0, microsecond=0))
+        key = (scanner_id, day_key)
+        if key not in scanner_actual_next_free:
+            scanner_actual_next_free[key] = open_dt
+
+        # Determine arrival time
+        order_row = orders_lookup.loc[order_id]
+        order_time = pd.to_datetime(order_row["order_time_dt"]).to_pydatetime()
+
+        # Outpatient: arrival around scheduled, may be late
+        patient_arrival = scheduled_start
+        if setting == "OUTPATIENT":
+            late = int(max(0, rng.normal(3, 7)))  # average a bit late
+            patient_arrival = scheduled_start + timedelta(minutes=late)
+        else:
+            # ED/IP: arrival after order time + transport/coordination
+            base = max(order_time, scheduled_start - timedelta(minutes=15))
+            if setting == "INPATIENT":
+                transport = int(max(0, rng.normal(config.INPATIENT_transport_delay_min, 8)))
+                patient_arrival = base + timedelta(minutes=transport)
+            else:
+                patient_arrival = base + timedelta(minutes=int(max(0, rng.normal(8, 6))))
+
+        # No-show only for outpatient
+        no_show = 0
+        canceled = 0
+        completed = 0
+
+        actual_start = None
+        actual_end = None
+        delay_reason = "none"
+
+        if setting == "OUTPATIENT":
+            lead_days = int(order_row["outpatient_lead_days"])
+            p = min(0.95, max(0.01, config.OUTPATIENT_no_show_rate * (1.0 + 0.04 * lead_days)))
+            if rng.random() < p:
+                no_show = 1
+                delay_reason = "no_show"
+                # no actual start/end
+            else:
+                # show
+                completed = 1
+        else:
+            completed = 1  # ED/IP always show in this synthetic model
+
+        if completed == 1:
+            # Start after patient arrival AND after scanner is free
+            start_candidate = max(patient_arrival, scanner_actual_next_free[key], open_dt, scheduled_start)
+
+            # Apply downtime delays if overlap with downtime window
+            d_events = downtime_by_day.get(day_key, {}).get(scanner_id, [])
+            for (ds, de) in d_events:
+                # if the scan would start during downtime, push it to downtime end
+                if ds <= start_candidate < de:
+                    start_candidate = de
+                    delay_reason = "downtime"
+                # if downtime overlaps the scan window, also push start (simplified)
+                scan_end_candidate = start_candidate + timedelta(minutes=planned_duration)
+                if _overlaps(start_candidate, scan_end_candidate, ds, de):
+                    start_candidate = de
+                    delay_reason = "downtime"
+
+            # Add “ED interrupt” effect: ED STAT bumps can cause small delays to non-ED
+            if setting == "OUTPATIENT" and modality in ("CT", "MR") and rng.random() < 0.10:
+                # mild bump risk
+                bump = int(rng.integers(5, 25))
+                start_candidate += timedelta(minutes=bump)
+                delay_reason = "bumped_by_urgent"
+
+            if setting == "INPATIENT" and modality in ("CT", "MR", "US") and rng.random() < 0.08:
+                extra = int(rng.integers(5, 20))
+                start_candidate += timedelta(minutes=extra)
+                delay_reason = "transport_or_prep"
+
+            # Actual duration = planned +/- noise
+            dur_noise = int(round(rng.normal(0, max(2, planned_duration * 0.08))))
+            actual_duration = max(3, planned_duration + dur_noise)
+
+            actual_start = start_candidate
+            actual_end = actual_start + timedelta(minutes=actual_duration)
+
+            # Clamp within day close? (Allow overtime by not clamping)
+            scanner_actual_next_free[key] = actual_end
+
+        exec_rows.append({
+            "sps_id": sps_id,
+            "order_id": order_id,
+            "scanner_id": scanner_id,
+            "patient_type": setting,
+            "resource_modality": modality,
+            "order_time": order_time.isoformat(),
+            "scheduled_start": scheduled_start.isoformat(),
+            "scheduled_end": pd.to_datetime(s["scheduled_end"]).to_pydatetime().isoformat(),
+            "patient_arrival_time": patient_arrival.isoformat(),
+            "actual_start": None if actual_start is None else actual_start.isoformat(),
+            "actual_end": None if actual_end is None else actual_end.isoformat(),
+            "completed": completed,
+            "canceled": canceled,
+            "no_show": no_show,
+            "delay_reason": delay_reason,
+            "educational_note": "Synthetic execution (not clinical)."
+        })
+
+    execution_df = pd.DataFrame(exec_rows)
+
+    # ---------- Write outputs ----------
+    out_dir = os.path.join(repo_root, "data", "raw")
+    _ensure_dir(out_dir)
+
+    # clean helper columns
+    orders_out = orders_df.drop(columns=["priority_rank", "order_time_dt"])
+    schedule_out = schedule_df.drop(columns=["scheduled_start_dt"])
+
+    orders_out.to_csv(os.path.join(out_dir, "orders.csv"), index=False)
+    schedule_out.to_csv(os.path.join(out_dir, "schedule_planned.csv"), index=False)
+    execution_df.to_csv(os.path.join(out_dir, "execution_actual.csv"), index=False)
+
+    print("Wrote:")
+    print("- data/raw/orders.csv")
+    print("- data/raw/schedule_planned.csv")
+    print("- data/raw/execution_actual.csv")
+    print("\nEducational Use Only (Non-Clinical).")
+
+
+if __name__ == "__main__":
+    main()
