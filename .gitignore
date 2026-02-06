@@ -1,0 +1,25 @@
+# --- OS Specific ---
+.DS_Store
+Thumbs.db
+
+# --- IDEs / Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Secrets & Environment (CRITICAL) ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets.json
+
+# --- General Junk ---
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dist/
+build/
